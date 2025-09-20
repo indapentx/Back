@@ -7,7 +7,7 @@
 
 import SwiftUI
 import SwiftData
-import AVFoundation
+import Combine
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -21,6 +21,8 @@ struct ContentView: View {
                     sessionControls
                     if let stats = analyticsSummary {
                         analyticsSection(summary: stats)
+                    } else {
+                        analyticsPlaceholder
                     }
                 }
                 .padding(.vertical, 32)
@@ -63,6 +65,18 @@ struct ContentView: View {
                     .font(.headline)
             }
             .toggleStyle(SwitchToggleStyle(tint: .accentColor))
+
+            Picker("Voice", selection: $viewModel.audioMode) {
+                ForEach(AudioPromptMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.top, 6)
+
+            Text(viewModel.audioMode.description)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -133,6 +147,7 @@ struct ContentView: View {
                 controlLabel(text: startButtonTitle, symbol: "play.fill")
             }
             .buttonStyle(.borderedProminent)
+            .disabled(viewModel.stage == .running)
 
             Button(action: viewModel.pause) {
                 controlLabel(text: "Pause", symbol: "pause.fill")
@@ -163,6 +178,7 @@ struct ContentView: View {
                 analyticsRow(title: "Sessions Today", value: "\(summary.sessionsToday)")
                 analyticsRow(title: "Current Streak", value: summary.currentStreakDescription)
                 analyticsRow(title: "Longest Streak", value: summary.longestStreakDescription)
+                analyticsRow(title: "Last Session", value: summary.lastSessionDescription)
                 analyticsRow(title: "Average Duration", value: summary.averageDurationDescription)
             }
             .padding(20)
@@ -181,6 +197,26 @@ struct ContentView: View {
             Text(value)
                 .font(.subheadline.weight(.semibold))
         }
+    }
+
+    private var analyticsPlaceholder: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Your Progress")
+                .font(.title2.weight(.semibold))
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Start a session to unlock your streaks and timing insights.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text("Your stats will appear here after the first completion.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .shadow(color: Color.black.opacity(0.04), radius: 12, x: 0, y: 4)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var startButtonTitle: String {
@@ -235,7 +271,7 @@ struct ContentView: View {
     private var phaseCountdown: String {
         guard viewModel.stage != .idle else { return "00" }
         let seconds = max(viewModel.phaseRemaining, 0)
-        return seconds.formatted(.number.precision(.integerLength(2)))
+        return String(format: "%02d", seconds)
     }
 
     private var analyticsSummary: AnalyticsSummary? {
@@ -246,7 +282,8 @@ struct ContentView: View {
 private extension SessionViewModel {
     var currentRepDisplay: String {
         guard stage != .idle else { return "–" }
-        return "\(max(currentRep, 0))/\(currentExercise?.reps ?? 0)"
+        let targetReps = currentExercise?.reps ?? exercises.first?.reps ?? 0
+        return "\(max(currentRep, 0))/\(targetReps)"
     }
 
     var totalElapsedDisplay: String {
@@ -262,14 +299,17 @@ private struct AnalyticsSummary {
     let currentStreak: Int
     let longestStreak: Int
     let averageDuration: TimeInterval
+    let lastSessionDuration: TimeInterval
 
     init?(records: [SessionRecord]) {
         guard !records.isEmpty else { return nil }
         let calendar = Calendar.current
         sessionsToday = records.filter { calendar.isDateInToday($0.startedAt) }.count
         averageDuration = records.map { $0.duration }.reduce(0, +) / Double(records.count)
+        lastSessionDuration = records.first?.duration ?? 0
 
         let uniqueDays = Array(Set(records.map { calendar.startOfDay(for: $0.startedAt) })).sorted()
+        let daySet = Set(uniqueDays)
         if uniqueDays.isEmpty {
             currentStreak = 0
             longestStreak = 0
@@ -282,6 +322,7 @@ private struct AnalyticsSummary {
                     longest = max(longest, current)
                 } else {
                     current = 1
+                    longest = max(longest, current)
                 }
             }
 
@@ -290,7 +331,7 @@ private struct AnalyticsSummary {
             if let mostRecent = uniqueDays.last {
                 var streak = 1
                 var cursor = mostRecent
-                while let previous = calendar.date(byAdding: .day, value: -1, to: cursor), uniqueDays.contains(previous) {
+                while let previous = calendar.date(byAdding: .day, value: -1, to: cursor), daySet.contains(previous) {
                     streak += 1
                     cursor = previous
                 }
@@ -313,6 +354,13 @@ private struct AnalyticsSummary {
         guard averageDuration.isFinite else { return "—" }
         let minutes = Int(averageDuration) / 60
         let seconds = Int(averageDuration) % 60
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    var lastSessionDescription: String {
+        guard lastSessionDuration > 0 else { return "—" }
+        let minutes = Int(lastSessionDuration) / 60
+        let seconds = Int(lastSessionDuration) % 60
         return String(format: "%02d:%02d", minutes, seconds)
     }
 }
