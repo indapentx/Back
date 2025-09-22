@@ -65,9 +65,10 @@ final class SessionViewModel: ObservableObject {
     // Rest durations reduced from 5 to 3 seconds
     // First exercise is 10 reps; each rep = two 5s holds (handled by halfRep logic).
     let exercises: [ExerciseDefinition] = [
-        ExerciseDefinition(title: "Pelvic Tilts", holdDuration: 5, restDuration: 3, reps: 10, postExerciseRest: 10),
-        ExerciseDefinition(title: "Bridge Hold", holdDuration: 10, restDuration: 3, reps: 10, postExerciseRest: 10),
-        ExerciseDefinition(title: "Cat Stretch", holdDuration: 5, restDuration: 3, reps: 20, postExerciseRest: 0)
+        ExerciseDefinition(title: "Single Knee-to-Chest", holdDuration: 5, restDuration: 3, reps: 10, postExerciseRest: 10),
+        ExerciseDefinition(title: "Double Knee-to-Chest", holdDuration: 10, restDuration: 3, reps: 10, postExerciseRest: 10),
+        ExerciseDefinition(title: "Hamstring Stretch (Left)", holdDuration: 10, restDuration: 3, reps: 10, postExerciseRest: 10),
+        ExerciseDefinition(title: "Hamstring Stretch (Right)", holdDuration: 10, restDuration: 3, reps: 10, postExerciseRest: 0)
     ]
 
     private var timer: Timer?
@@ -110,11 +111,13 @@ final class SessionViewModel: ObservableObject {
             stage = .running
             playCue(.resume)
         case .waitingForNextExercise:
-            guard let nextIndex = currentExerciseIndex else {
+            // Advance to the next exercise if possible
+            if let idx = currentExerciseIndex {
+                let next = idx + 1
+                beginExercise(at: next)
+            } else {
                 beginSession()
-                return
             }
-            beginExercise(at: nextIndex)
         case .running:
             break
         }
@@ -133,6 +136,44 @@ final class SessionViewModel: ObservableObject {
         resetSession()
     }
 
+    // Skip to the next rep; if no rep to skip, skip to the next exercise (or finish).
+    func skip() {
+        // Only meaningful during an active/paused session
+        guard stage == .running || stage == .paused else { return }
+
+        publishChange()
+
+        // Stop any currently playing audio to avoid overlap when skipping
+        promptEngine.stop()
+        pauseWhileAudio = false
+        isSequenceCountingActive = false
+        pendingSequenceCountDuration = nil
+
+        // If still in prepare, start the first exercise
+        if phase == .prepare {
+            beginExercise(at: 0)
+            return
+        }
+
+        guard let index = currentExerciseIndex,
+              exercises.indices.contains(index),
+              let exercise = currentExercise else {
+            return
+        }
+
+        // If there are remaining reps, jump to the next rep (do not count as completed)
+        if currentRep < exercise.reps {
+            halfRepPending = false
+            currentRep += 1
+            setPhase(.hold)
+            return
+        }
+
+        // Otherwise skip to the next exercise (or finish)
+        halfRepPending = false
+        advanceToNextExercise(from: index)
+    }
+
     var progress: Double {
         let total = totalRepsRequired
         guard total > 0 else { return 0 }
@@ -146,7 +187,7 @@ final class SessionViewModel: ObservableObject {
 
     var upcomingExercise: ExerciseDefinition? {
         guard let index = currentExerciseIndex else { return exercises.first }
-        let nextIndex = stage == .waitingForNextExercise ? index : index + 1
+        let nextIndex = index + 1
         guard exercises.indices.contains(nextIndex) else { return nil }
         return exercises[nextIndex]
     }
@@ -335,9 +376,6 @@ final class SessionViewModel: ObservableObject {
     }
 
     private func currentRestDuration() -> Int {
-        if currentExerciseIndex == 2 && currentRep == 10 {
-            return 10
-        }
         return currentExercise?.restDuration ?? 0
     }
 
@@ -386,7 +424,7 @@ final class SessionViewModel: ObservableObject {
 
     private func finishExercise() {
         guard let index = currentExerciseIndex else { return }
-        playCue(.exerciseComplete(index: index))
+        // Removed exercise complete cue as requested
         halfRepPending = false
 
         if exercises[index].postExerciseRest > 0 {
