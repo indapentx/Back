@@ -59,24 +59,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Workout Session")
                 .font(.title2.weight(.semibold))
-
-            Toggle(isOn: $viewModel.autoplayEnabled) {
-                Label("Autoplay", systemImage: viewModel.autoplayEnabled ? "play.circle.fill" : "play.circle")
-                    .font(.headline)
-            }
-            .toggleStyle(SwitchToggleStyle(tint: .accentColor))
-
-            Picker("Voice", selection: $viewModel.audioMode) {
-                ForEach(AudioPromptMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.top, 6)
-
-            Text(viewModel.audioMode.description)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            // Voice mode is fixed to Auto and Autoplay is always on; controls removed.
         }
     }
 
@@ -143,23 +126,51 @@ struct ContentView: View {
 
     private var controlsRow: some View {
         HStack(spacing: 16) {
-            Button(action: viewModel.start) {
-                controlLabel(text: startButtonTitle, symbol: "play.fill")
+            Button(action: primaryButtonAction) {
+                controlLabel(text: primaryButtonTitle, symbol: primaryButtonSymbol)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(viewModel.stage == .running)
-
-            Button(action: viewModel.pause) {
-                controlLabel(text: "Pause", symbol: "pause.fill")
-            }
-            .buttonStyle(.bordered)
-            .disabled(viewModel.stage != .running)
 
             Button(role: .destructive, action: viewModel.stop) {
                 controlLabel(text: "Stop", symbol: "stop.fill")
             }
             .buttonStyle(.bordered)
             .disabled(viewModel.stage == .idle)
+        }
+    }
+
+    private func primaryButtonAction() {
+        switch viewModel.stage {
+        case .running:
+            viewModel.pause()
+        case .paused, .idle, .completed, .waitingForNextExercise:
+            viewModel.start()
+        }
+    }
+
+    private var primaryButtonTitle: String {
+        switch viewModel.stage {
+        case .running:
+            return "Pause"
+        case .paused:
+            return "Resume"
+        case .completed:
+            return "Restart"
+        case .waitingForNextExercise, .idle:
+            return "Start"
+        }
+    }
+
+    private var primaryButtonSymbol: String {
+        switch viewModel.stage {
+        case .running:
+            return "pause.fill"
+        case .paused:
+            return "play.fill"
+        case .completed:
+            return "gobackward"
+        case .waitingForNextExercise, .idle:
+            return "play.fill"
         }
     }
 
@@ -219,21 +230,6 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var startButtonTitle: String {
-        switch viewModel.stage {
-        case .running:
-            return "Running"
-        case .paused:
-            return "Resume"
-        case .waitingForNextExercise:
-            return "Next"
-        case .completed:
-            return "Restart"
-        case .idle:
-            return "Start"
-        }
-    }
-
     private var currentExerciseTitle: String {
         if let exercise = viewModel.currentExercise {
             return exercise.title
@@ -256,6 +252,8 @@ struct ContentView: View {
             return viewModel.currentExercise?.restDuration == 0 ? "Transition" : "Rest"
         case .cooldown:
             return "Cooldown"
+        case .prepare:
+            return "Get Ready"
         case .idle:
             switch viewModel.stage {
             case .waitingForNextExercise:

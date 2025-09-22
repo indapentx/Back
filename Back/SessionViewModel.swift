@@ -28,6 +28,7 @@ enum SessionStage: Equatable {
 
 enum ExercisePhase: Equatable {
     case idle
+    case prepare
     case hold
     case rest
     case cooldown
@@ -43,7 +44,6 @@ struct SessionSummary {
 
 @MainActor
 final class SessionViewModel: ObservableObject {
-    // Explicit publisher to satisfy ObservableObject when using @MainActor
     nonisolated let objectWillChange = ObservableObjectPublisher()
 
     @Published private(set) var stage: SessionStage = .idle
@@ -52,20 +52,22 @@ final class SessionViewModel: ObservableObject {
     @Published private(set) var currentRep: Int = 0
     @Published private(set) var completedReps: Int = 0
     @Published private(set) var totalElapsedSeconds: Int = 0
-    @Published var autoplayEnabled: Bool = true
     @Published var spokenPrompt: String = ""
-    @Published var audioMode: AudioPromptMode = .auto {
-        didSet {
-            promptEngine.mode = audioMode
-        }
-    }
+
+    // Voice mode is fixed to Auto
+    private let audioMode: AudioPromptMode = .auto
+
+    // Autoplay is always enabled and not user-changeable
+    private let autoplayEnabled: Bool = true
 
     var onSessionCompletion: ((SessionSummary) -> Void)?
 
+    // Rest durations reduced from 5 to 3 seconds
+    // First exercise is 10 reps; each rep = two 5s holds (handled by halfRep logic).
     let exercises: [ExerciseDefinition] = [
-        ExerciseDefinition(title: "Pelvic Tilts", holdDuration: 5, restDuration: 5, reps: 10, postExerciseRest: 0),
-        ExerciseDefinition(title: "Bridge Hold", holdDuration: 10, restDuration: 5, reps: 10, postExerciseRest: 0),
-        ExerciseDefinition(title: "Cat Stretch", holdDuration: 5, restDuration: 5, reps: 10, postExerciseRest: 10)
+        ExerciseDefinition(title: "Pelvic Tilts", holdDuration: 5, restDuration: 3, reps: 10, postExerciseRest: 10),
+        ExerciseDefinition(title: "Bridge Hold", holdDuration: 10, restDuration: 3, reps: 10, postExerciseRest: 10),
+        ExerciseDefinition(title: "Cat Stretch", holdDuration: 5, restDuration: 3, reps: 20, postExerciseRest: 0)
     ]
 
     private var timer: Timer?
@@ -74,6 +76,14 @@ final class SessionViewModel: ObservableObject {
     private var sessionStartDate: Date?
     private var isSequenceCountingActive = false
     private var pendingSequenceCountDuration: Int? = nil
+
+    private let prepareDuration: Int = 10
+
+    // Pause advancement of time/phase while non-count audio is playing
+    private var pauseWhileAudio: Bool = false
+
+    // Special handling: for the first exercise, two holds make one rep
+    private var halfRepPending: Bool = false
 
     private var totalRepsRequired: Int {
         exercises.reduce(0) { $0 + $1.reps }
@@ -84,12 +94,9 @@ final class SessionViewModel: ObservableObject {
     }
 
     deinit {
-        // deinit is nonisolated; avoid calling main-actor work directly here.
         timer?.invalidate()
         let engine = promptEngine
-        Task { @MainActor in
-            engine.stop()
-        }
+        Task { @MainActor in engine.stop() }
     }
 
     func start() {
@@ -127,8 +134,9 @@ final class SessionViewModel: ObservableObject {
     }
 
     var progress: Double {
-        guard totalRepsRequired > 0 else { return 0 }
-        return Double(completedReps) / Double(totalRepsRequired)
+        let total = totalRepsRequired
+        guard total > 0 else { return 0 }
+        return Double(completedReps) / Double(total)
     }
 
     var currentExercise: ExerciseDefinition? {
@@ -137,22 +145,23 @@ final class SessionViewModel: ObservableObject {
     }
 
     var upcomingExercise: ExerciseDefinition? {
-        guard let index = currentExerciseIndex else {
-            return exercises.first
-        }
+        guard let index = currentExerciseIndex else { return exercises.first }
         let nextIndex = stage == .waitingForNextExercise ? index : index + 1
         guard exercises.indices.contains(nextIndex) else { return nil }
         return exercises[nextIndex]
     }
 
     var phaseRemaining: Int {
-        guard let exercise = currentExercise else { return 0 }
         switch phase {
+        case .prepare:
+            return max(prepareDuration - phaseElapsedSeconds, 0)
         case .hold:
+            guard let exercise = currentExercise else { return 0 }
             return max(exercise.holdDuration - phaseElapsedSeconds, 0)
         case .rest:
-            return max(exercise.restDuration - phaseElapsedSeconds, 0)
+            return max(currentRestDuration() - phaseElapsedSeconds, 0)
         case .cooldown:
+            guard let exercise = currentExercise else { return 0 }
             return max(exercise.postExerciseRest - phaseElapsedSeconds, 0)
         case .idle:
             return 0
@@ -165,7 +174,8 @@ final class SessionViewModel: ObservableObject {
         stage = .running
         completedReps = 0
         totalElapsedSeconds = 0
-        beginExercise(at: 0)
+        setPhase(.prepare)
+        startTimer()
     }
 
     private func beginExercise(at index: Int) {
@@ -177,6 +187,7 @@ final class SessionViewModel: ObservableObject {
         stage = .running
         currentExerciseIndex = index
         currentRep = 1
+        halfRepPending = false
         setPhase(.hold)
         playCue(.exerciseIntro(index: index, title: exercises[index].title))
         startTimer()
@@ -193,29 +204,46 @@ final class SessionViewModel: ObservableObject {
     private func configurePhaseAudio(for phase: ExercisePhase) {
         switch phase {
         case .hold:
-            if let exercise = currentExercise,
-               promptEngine.hasRecording(for: .count(exercise.holdDuration)) {
-                pendingSequenceCountDuration = exercise.holdDuration
-                isSequenceCountingActive = false
+            if let exercise = currentExercise {
+                if exercise.holdDuration >= 10, promptEngine.hasRecording(for: .count(10)) {
+                    pendingSequenceCountDuration = 10
+                    isSequenceCountingActive = false
+                } else if exercise.holdDuration >= 5, promptEngine.hasRecording(for: .count(5)) {
+                    pendingSequenceCountDuration = 5
+                    isSequenceCountingActive = false
+                } else {
+                    isSequenceCountingActive = false
+                    pendingSequenceCountDuration = nil
+                }
             } else {
                 isSequenceCountingActive = false
                 pendingSequenceCountDuration = nil
             }
-        default:
+        case .prepare, .rest, .cooldown, .idle:
             isSequenceCountingActive = false
             pendingSequenceCountDuration = nil
         }
     }
 
     private func announcePhaseStart() {
-        guard let exercise = currentExercise else { return }
         switch phase {
+        case .prepare:
+            spokenPrompt = "Get ready \(prepareDuration)s"
         case .hold:
-            spokenPrompt = "Hold for \(exercise.holdDuration)s"
+            if let exercise = currentExercise {
+                spokenPrompt = "Hold for \(exercise.holdDuration)s"
+            } else {
+                spokenPrompt = ""
+            }
         case .rest:
-            spokenPrompt = exercise.restDuration > 0 ? "Rest \(exercise.restDuration)s" : ""
+            let dur = currentRestDuration()
+            spokenPrompt = dur > 0 ? "Rest \(dur)s" : ""
         case .cooldown:
-            spokenPrompt = exercise.postExerciseRest > 0 ? "Cooldown \(exercise.postExerciseRest)s" : ""
+            if let exercise = currentExercise {
+                spokenPrompt = exercise.postExerciseRest > 0 ? "Cooldown \(exercise.postExerciseRest)s" : ""
+            } else {
+                spokenPrompt = ""
+            }
         case .idle:
             spokenPrompt = ""
         }
@@ -235,14 +263,14 @@ final class SessionViewModel: ObservableObject {
         spokenPrompt = ""
         pendingSequenceCountDuration = nil
         isSequenceCountingActive = false
+        pauseWhileAudio = false
+        halfRepPending = false
     }
 
     private func startTimer() {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.tick()
-            }
+            Task { @MainActor [weak self] in self?.tick() }
         }
         if let timer {
             RunLoop.main.add(timer, forMode: .common)
@@ -256,21 +284,32 @@ final class SessionViewModel: ObservableObject {
 
     private func tick() {
         guard stage == .running else { return }
+
+        if pauseWhileAudio {
+            if promptEngine.isBusy {
+                return
+            } else {
+                pauseWhileAudio = false
+            }
+        }
+
         publishChange()
         totalElapsedSeconds += 1
         phaseElapsedSeconds += 1
 
         switch phase {
+        case .prepare:
+            if phaseElapsedSeconds >= prepareDuration {
+                beginExercise(at: 0)
+            }
         case .hold:
             startSequenceCountingIfNeeded()
-            speakCountIfNeeded()
             guard let exercise = currentExercise else { return }
             if phaseElapsedSeconds >= exercise.holdDuration {
                 transitionToRest()
             }
         case .rest:
-            guard let exercise = currentExercise else { return }
-            if phaseElapsedSeconds >= exercise.restDuration {
+            if phaseElapsedSeconds >= currentRestDuration() {
                 completeRep()
             }
         case .cooldown:
@@ -283,13 +322,6 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
-    private func speakCountIfNeeded() {
-        guard phase == .hold else { return }
-        guard !isSequenceCountingActive else { return }
-        guard phaseElapsedSeconds > 0 else { return }
-        playCue(.count(phaseElapsedSeconds))
-    }
-
     private func startSequenceCountingIfNeeded() {
         guard phase == .hold else { return }
         guard !isSequenceCountingActive else { return }
@@ -297,12 +329,21 @@ final class SessionViewModel: ObservableObject {
         guard !promptEngine.isBusy else { return }
         isSequenceCountingActive = true
         pendingSequenceCountDuration = nil
-        playCue(.count(duration))
+        if promptEngine.hasRecording(for: .count(duration)) {
+            playCue(.count(duration))
+        }
+    }
+
+    private func currentRestDuration() -> Int {
+        if currentExerciseIndex == 2 && currentRep == 10 {
+            return 10
+        }
+        return currentExercise?.restDuration ?? 0
     }
 
     private func transitionToRest() {
-        guard let exercise = currentExercise else { return }
-        if exercise.restDuration > 0 {
+        let rest = currentRestDuration()
+        if rest > 0 {
             setPhase(.rest)
         } else {
             completeRep()
@@ -312,6 +353,26 @@ final class SessionViewModel: ObservableObject {
     private func completeRep() {
         guard let exercise = currentExercise else { return }
         publishChange()
+
+        if currentExerciseIndex == 0 {
+            if !halfRepPending {
+                halfRepPending = true
+                setPhase(.hold)
+                return
+            } else {
+                halfRepPending = false
+                completedReps += 1
+                playCue(.repComplete(currentRep))
+                if currentRep >= exercise.reps {
+                    finishExercise()
+                } else {
+                    currentRep += 1
+                    setPhase(.hold)
+                }
+                return
+            }
+        }
+
         completedReps += 1
         playCue(.repComplete(currentRep))
 
@@ -326,6 +387,7 @@ final class SessionViewModel: ObservableObject {
     private func finishExercise() {
         guard let index = currentExerciseIndex else { return }
         playCue(.exerciseComplete(index: index))
+        halfRepPending = false
 
         if exercises[index].postExerciseRest > 0 {
             setPhase(.cooldown)
@@ -343,18 +405,8 @@ final class SessionViewModel: ObservableObject {
     private func advanceToNextExercise(from index: Int) {
         let nextIndex = index + 1
         if exercises.indices.contains(nextIndex) {
-            if autoplayEnabled {
-                beginExercise(at: nextIndex)
-            } else {
-                timer?.invalidate()
-                publishChange()
-                currentExerciseIndex = nextIndex
-                currentRep = 0
-                stage = .waitingForNextExercise
-                phase = .idle
-                spokenPrompt = "Ready for exercise \(nextIndex + 1)"
-                playCue(.readyForExercise(nextIndex + 1))
-            }
+            // Always autoplay since it's fixed to true
+            beginExercise(at: nextIndex)
         } else {
             finishSession()
         }
@@ -379,7 +431,14 @@ final class SessionViewModel: ObservableObject {
     }
 
     private func playCue(_ cue: AudioPromptCue) {
-        promptEngine.play(cue)
+        switch cue {
+        case .count(let n):
+            guard promptEngine.hasRecording(for: .count(n)) else { return }
+            promptEngine.play(cue)
+        default:
+            pauseWhileAudio = true
+            promptEngine.play(cue)
+        }
     }
 
     private func publishChange() {
