@@ -129,10 +129,7 @@ final class AudioPromptEngine {
             }
             speak(cue.spokenText)
         case .recordings:
-            if playRecordingIfAvailable(for: cue) {
-                return
-            }
-            speak(cue.spokenText)
+            _ = playRecordingIfAvailable(for: cue)
         }
     }
 
