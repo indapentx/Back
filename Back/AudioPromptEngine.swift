@@ -41,15 +41,12 @@ enum AudioPromptMode: String, CaseIterable, Identifiable, Hashable {
 enum AudioPromptCue: Equatable {
     case count(Int)
     case rest
-    case repStart(Int)
     case repComplete(Int)
     case exerciseIntro(index: Int, title: String)
-    case exerciseComplete(index: Int)
     case cooldown
     case sessionComplete
     case resume
     case paused
-    case readyForExercise(Int)
     case custom(text: String, resource: String? = nil)
 
     var spokenText: String {
@@ -58,14 +55,11 @@ enum AudioPromptCue: Equatable {
             return "\(number)"
         case .rest:
             return "Rest"
-        case .repStart(let number):
-            return "Rep \(number) start"
         case .repComplete(let number):
-            return "Rep \(number) complete"
+            // speak "Rep N"
+            return "Rep \(number)"
         case .exerciseIntro(let index, let title):
             return "Exercise \(index + 1): \(title)"
-        case .exerciseComplete(let index):
-            return "Exercise \(index + 1) done"
         case .cooldown:
             return "Cooldown"
         case .sessionComplete:
@@ -74,29 +68,25 @@ enum AudioPromptCue: Equatable {
             return "Resuming"
         case .paused:
             return "Paused"
-        case .readyForExercise(let index):
-            return "Tap start when ready for exercise \(index)"
         case .custom(let text, _):
             return text
         }
     }
 
     /// Returns candidate base filenames (without extension) for locating a custom recording.
-    /// Provide files such as `count_1.m4a`, `rest.wav`, `rep_start.mp3`, etc.
+    /// Provide files such as `count_1.m4a`, `rep_2.m4a`, etc.
     var candidateResourceNames: [String] {
         switch self {
         case .count(let number):
             return ["count_\(number)"]
         case .rest:
             return ["rest"]
-        case .repStart(let number):
-            return ["rep_\(number)_start", "rep_start"]
         case .repComplete(let number):
-            return ["rep_\(number)_complete", "rep_complete"]
+            // look for "rep_N" first, fallback to a generic "rep"
+            return ["rep_\(number)", "rep"]
         case .exerciseIntro(let index, _):
-            return ["exercise_\(index + 1)", "exercise_start"]
-        case .exerciseComplete:
-            return ["exercise_complete"]
+            // only specific per-exercise intro file
+            return ["exercise_\(index + 1)"]
         case .cooldown:
             return ["cooldown"]
         case .sessionComplete:
@@ -105,8 +95,6 @@ enum AudioPromptCue: Equatable {
             return ["resume"]
         case .paused:
             return ["paused"]
-        case .readyForExercise:
-            return ["ready_next_exercise"]
         case .custom(_, let resource):
             if let resource {
                 return [resource]

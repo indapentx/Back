@@ -65,10 +65,10 @@ final class SessionViewModel: ObservableObject {
     // Rest durations reduced from 5 to 3 seconds
     // First exercise is 10 reps; each rep = two 5s holds (handled by halfRep logic).
     let exercises: [ExerciseDefinition] = [
-        ExerciseDefinition(title: "Single Knee-to-Chest", holdDuration: 5, restDuration: 3, reps: 10, postExerciseRest: 10),
-        ExerciseDefinition(title: "Double Knee-to-Chest", holdDuration: 10, restDuration: 3, reps: 10, postExerciseRest: 10),
-        ExerciseDefinition(title: "Hamstring Stretch (Left)", holdDuration: 10, restDuration: 3, reps: 10, postExerciseRest: 10),
-        ExerciseDefinition(title: "Hamstring Stretch (Right)", holdDuration: 10, restDuration: 3, reps: 10, postExerciseRest: 0)
+        ExerciseDefinition(title: "Single Knee-to-Chest", holdDuration: 5, restDuration: 3, reps: 10, postExerciseRest: 15),
+        ExerciseDefinition(title: "Double Knee-to-Chest", holdDuration: 10, restDuration: 3, reps: 10, postExerciseRest: 15),
+        ExerciseDefinition(title: "Hamstring Stretch (Right)", holdDuration: 5, restDuration: 3, reps: 10, postExerciseRest: 15),
+        ExerciseDefinition(title: "Hamstring Stretch (Left)", holdDuration: 5, restDuration: 3, reps: 10, postExerciseRest: 0)
     ]
 
     private var timer: Timer?
@@ -78,7 +78,8 @@ final class SessionViewModel: ObservableObject {
     private var isSequenceCountingActive = false
     private var pendingSequenceCountDuration: Int? = nil
 
-    private let prepareDuration: Int = 10
+    // Increase Get Ready from 10 to 15 seconds
+    private let prepareDuration: Int = 15
 
     // Pause advancement of time/phase while non-count audio is playing
     private var pauseWhileAudio: Bool = false
@@ -246,6 +247,7 @@ final class SessionViewModel: ObservableObject {
         switch phase {
         case .hold:
             if let exercise = currentExercise {
+                // Behavior based on hold duration and available recordings
                 if exercise.holdDuration >= 10, promptEngine.hasRecording(for: .count(10)) {
                     pendingSequenceCountDuration = 10
                     isSequenceCountingActive = false
