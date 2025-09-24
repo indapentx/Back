@@ -19,11 +19,17 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 28) {
                     sessionControls
-                    if let stats = analyticsSummary {
-                        analyticsSection(summary: stats)
-                    } else {
-                        analyticsPlaceholder
+
+                    Group {
+                        if let stats = analyticsSummary {
+                            analyticsSection(summary: stats)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        } else {
+                            analyticsPlaceholder
+                                .transition(.opacity)
+                        }
                     }
+                    .animation(.easeInOut(duration: 0.35), value: analyticsSummary?.sessionsToday)
                 }
                 .padding(.vertical, 32)
                 .padding(.horizontal, 24)
@@ -32,6 +38,12 @@ struct ContentView: View {
             .navigationTitle("Back Relief")
         }
         .onAppear(perform: configureSessionCallbacks)
+        // Keep stage-based animations for subtle layout changes
+        .animation(.snappy(duration: 0.35), value: viewModel.stage)
+        // Remove phase-wide implicit animations to avoid animating phase text
+        // .animation(.snappy(duration: 0.35), value: viewModel.phase) // removed
+        .animation(.easeInOut(duration: 0.35), value: viewModel.spokenPrompt)
+        .animation(.easeInOut(duration: 0.35), value: viewModel.currentExerciseIndex)
     }
 
     private func configureSessionCallbacks() {
@@ -67,21 +79,33 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
+                    // Keep title transition if desired; no animation on phase text
                     Text(currentExerciseTitle)
+                        .id("title-\(currentExerciseTitle)")
                         .font(.title3.weight(.semibold))
+                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+
                     Text(phaseDescription)
+                        .id("phase-\(phaseDescription)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        // Remove transition/animation on phase text (Get Ready / Hold / Rest)
                 }
                 Spacer()
+
+                // Countdown now matches elapsed timer animation style
                 Text(phaseCountdown)
+                    .id("countdown-\(phaseCountdown)")
                     .font(.system(size: 42, weight: .semibold, design: .rounded))
                     .monospacedDigit()
+                    .contentTransition(.numericText())
+                    .animation(.linear(duration: 0.2), value: phaseCountdown)
             }
 
             ProgressView(value: viewModel.progress)
                 .progressViewStyle(.linear)
                 .tint(.accentColor)
+                .animation(.easeInOut(duration: 0.4), value: viewModel.progress)
 
             HStack {
                 VStack(alignment: .leading) {
@@ -91,6 +115,8 @@ struct ContentView: View {
                     Text("\(viewModel.currentRepDisplay)")
                         .font(.headline)
                         .monospacedDigit()
+                        .contentTransition(.numericText())
+                        .animation(.easeInOut(duration: 0.25), value: viewModel.currentRepDisplay)
                 }
                 Spacer()
                 VStack(alignment: .leading) {
@@ -100,6 +126,8 @@ struct ContentView: View {
                     Text(viewModel.totalElapsedDisplay)
                         .font(.headline)
                         .monospacedDigit()
+                        .contentTransition(.numericText())
+                        .animation(.linear(duration: 0.2), value: viewModel.totalElapsedDisplay)
                 }
                 Spacer()
                 VStack(alignment: .leading) {
@@ -107,32 +135,44 @@ struct ContentView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text(nextExerciseTitle)
+                        .id("next-\(nextExerciseTitle)")
                         .font(.headline)
+                        .transition(.opacity)
+                        .animation(.easeInOut(duration: 0.25), value: nextExerciseTitle)
                 }
             }
 
             if !viewModel.spokenPrompt.isEmpty {
                 Divider().padding(.top, 6)
+                    .transition(.opacity)
+
                 Label(viewModel.spokenPrompt, systemImage: "waveform")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .padding(20)
         .frame(maxWidth: .infinity)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .shadow(color: Color.black.opacity(0.05), radius: 16, x: 0, y: 6)
+        // Subtle emphasis when running vs idle/paused
+        .scaleEffect(cardScale)
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: viewModel.stage)
+        // Removed phase-based animation to avoid animating phase text
     }
 
     private var controlsRow: some View {
         HStack(spacing: 16) {
             Button(action: primaryButtonAction) {
                 controlLabel(text: primaryButtonTitle, symbol: primaryButtonSymbol)
+                // Removed symbolEffect animations on the primary button
             }
             .buttonStyle(.borderedProminent)
 
             Button(role: .destructive, action: viewModel.stop) {
                 controlLabel(text: "Stop", symbol: "stop.fill")
+                // Removed symbolEffect and state animations on the stop button
             }
             .buttonStyle(.bordered)
             .disabled(viewModel.stage == .idle)
@@ -142,9 +182,13 @@ struct ContentView: View {
     private func primaryButtonAction() {
         switch viewModel.stage {
         case .running:
-            viewModel.pause()
+            withAnimation(.snappy(duration: 0.25)) {
+                viewModel.pause()
+            }
         case .paused, .idle, .completed, .waitingForNextExercise:
-            viewModel.start()
+            withAnimation(.snappy(duration: 0.25)) {
+                viewModel.start()
+            }
         }
     }
 
@@ -207,6 +251,8 @@ struct ContentView: View {
             Spacer()
             Text(value)
                 .font(.subheadline.weight(.semibold))
+                .contentTransition(.numericText())
+                .animation(.easeInOut(duration: 0.25), value: value)
         }
     }
 
@@ -270,6 +316,14 @@ struct ContentView: View {
         guard viewModel.stage != .idle else { return "00" }
         let seconds = max(viewModel.phaseRemaining, 0)
         return String(format: "%02d", seconds)
+    }
+
+    // Subtle emphasis on the card while actively running
+    private var cardScale: CGFloat {
+        switch viewModel.stage {
+        case .running: return 1.01
+        default: return 1.0
+        }
     }
 
     private var analyticsSummary: AnalyticsSummary? {
