@@ -71,7 +71,13 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Workout Session")
                 .font(.title2.weight(.semibold))
-            // Voice mode is fixed to Auto and Autoplay is always on; controls removed.
+            // Voice mode remains auto-driven; silent toggle controls alternate prompts.
+            Toggle(isOn: $viewModel.isSilentModeEnabled) {
+                Label("Silent Mode", systemImage: "speaker.slash.fill")
+                    .font(.subheadline)
+            }
+            .toggleStyle(.switch)
+            .tint(.accentColor)
         }
     }
 

@@ -47,7 +47,8 @@ enum AudioPromptCue: Equatable {
     case sessionComplete
     case resume
     case paused
-    case custom(text: String, resource: String? = nil)
+    case holdRelease
+    case custom(text: String, resource: String? = nil, preferredExtension: String? = nil)
 
     var spokenText: String {
         switch self {
@@ -68,7 +69,9 @@ enum AudioPromptCue: Equatable {
             return "Resuming"
         case .paused:
             return "Paused"
-        case .custom(let text, _):
+        case .holdRelease:
+            return ""
+        case .custom(let text, _, _):
             return text
         }
     }
@@ -95,11 +98,22 @@ enum AudioPromptCue: Equatable {
             return ["resume"]
         case .paused:
             return ["paused"]
-        case .custom(_, let resource):
+        case .holdRelease:
+            return ["hold_release_cue"]
+        case .custom(_, let resource, _):
             if let resource {
                 return [resource]
             }
             return []
+        }
+    }
+
+    var preferredFileExtension: String? {
+        switch self {
+        case .custom(_, _, let ext):
+            return ext
+        default:
+            return nil
         }
     }
 }
@@ -176,7 +190,15 @@ final class AudioPromptEngine {
         guard let baseURL = Bundle.main.resourceURL else { return nil }
 
         for name in names {
-            for ext in supportedExtensions {
+            var extensionsToCheck = supportedExtensions
+            if let preferredExt = cue.preferredFileExtension {
+                if let existingIndex = extensionsToCheck.firstIndex(of: preferredExt) {
+                    extensionsToCheck.remove(at: existingIndex)
+                }
+                extensionsToCheck.insert(preferredExt, at: 0)
+            }
+
+            for ext in extensionsToCheck {
                 let cacheKey = "\(name).\(ext)"
                 if let cached = resolvedResourceURLs[cacheKey] {
                     return cached

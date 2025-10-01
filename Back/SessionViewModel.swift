@@ -53,6 +53,11 @@ final class SessionViewModel: ObservableObject {
     @Published private(set) var completedReps: Int = 0
     @Published private(set) var totalElapsedSeconds: Int = 0
     @Published var spokenPrompt: String = ""
+    @Published var isSilentModeEnabled: Bool = false {
+        didSet {
+            promptEngine.stop()
+        }
+    }
 
     // Voice mode is fixed to Auto
     private let audioMode: AudioPromptMode = .auto
@@ -231,7 +236,9 @@ final class SessionViewModel: ObservableObject {
         currentRep = 1
         halfRepPending = false
         setPhase(.hold)
-        playCue(.exerciseIntro(index: index, title: exercises[index].title))
+        if !isSilentModeEnabled {
+            playCue(.exerciseIntro(index: index, title: exercises[index].title))
+        }
         startTimer()
     }
 
@@ -247,16 +254,27 @@ final class SessionViewModel: ObservableObject {
         switch phase {
         case .hold:
             if let exercise = currentExercise {
-                // Behavior based on hold duration and available recordings
-                if exercise.holdDuration >= 10, promptEngine.hasRecording(for: .count(10)) {
-                    pendingSequenceCountDuration = 10
-                    isSequenceCountingActive = false
-                } else if exercise.holdDuration >= 5, promptEngine.hasRecording(for: .count(5)) {
-                    pendingSequenceCountDuration = 5
+                if isSilentModeEnabled {
+                    if exercise.holdDuration >= 10 {
+                        pendingSequenceCountDuration = 10
+                    } else if exercise.holdDuration >= 5 {
+                        pendingSequenceCountDuration = 5
+                    } else {
+                        pendingSequenceCountDuration = nil
+                    }
                     isSequenceCountingActive = false
                 } else {
-                    isSequenceCountingActive = false
-                    pendingSequenceCountDuration = nil
+                    // Behavior based on hold duration and available recordings
+                    if exercise.holdDuration >= 10, promptEngine.hasRecording(for: .count(10)) {
+                        pendingSequenceCountDuration = 10
+                        isSequenceCountingActive = false
+                    } else if exercise.holdDuration >= 5, promptEngine.hasRecording(for: .count(5)) {
+                        pendingSequenceCountDuration = 5
+                        isSequenceCountingActive = false
+                    } else {
+                        isSequenceCountingActive = false
+                        pendingSequenceCountDuration = nil
+                    }
                 }
             } else {
                 isSequenceCountingActive = false
@@ -372,7 +390,9 @@ final class SessionViewModel: ObservableObject {
         guard !promptEngine.isBusy else { return }
         isSequenceCountingActive = true
         pendingSequenceCountDuration = nil
-        if promptEngine.hasRecording(for: .count(duration)) {
+        if isSilentModeEnabled {
+            playCue(.count(duration))
+        } else if promptEngine.hasRecording(for: .count(duration)) {
             playCue(.count(duration))
         }
     }
@@ -382,6 +402,9 @@ final class SessionViewModel: ObservableObject {
     }
 
     private func transitionToRest() {
+        if isSilentModeEnabled {
+            playSilentHoldReleaseCue()
+        }
         let rest = currentRestDuration()
         if rest > 0 {
             setPhase(.rest)
@@ -402,7 +425,9 @@ final class SessionViewModel: ObservableObject {
             } else {
                 halfRepPending = false
                 completedReps += 1
-                playCue(.repComplete(currentRep))
+                if !isSilentModeEnabled {
+                    playCue(.repComplete(currentRep))
+                }
                 if currentRep >= exercise.reps {
                     finishExercise()
                 } else {
@@ -414,7 +439,9 @@ final class SessionViewModel: ObservableObject {
         }
 
         completedReps += 1
-        playCue(.repComplete(currentRep))
+        if !isSilentModeEnabled {
+            playCue(.repComplete(currentRep))
+        }
 
         if currentRep >= exercise.reps {
             finishExercise()
@@ -471,6 +498,10 @@ final class SessionViewModel: ObservableObject {
     }
 
     private func playCue(_ cue: AudioPromptCue) {
+        if isSilentModeEnabled, handleSilentCue(cue) {
+            return
+        }
+
         switch cue {
         case .count(let n):
             guard promptEngine.hasRecording(for: .count(n)) else { return }
@@ -479,6 +510,41 @@ final class SessionViewModel: ObservableObject {
             pauseWhileAudio = true
             promptEngine.play(cue)
         }
+    }
+
+    private func handleSilentCue(_ cue: AudioPromptCue) -> Bool {
+        switch cue {
+        case .exerciseIntro:
+            return true
+        case .count:
+            playSilentHoldReleaseCue()
+            return true
+        case .repComplete:
+            return true
+        case .cooldown:
+            playSilentRecording(resource: "cooldown", preferredExtension: "wav", shouldPause: true)
+            return true
+        case .sessionComplete:
+            playSilentRecording(resource: "session_complete", preferredExtension: "wav", shouldPause: true)
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func playSilentHoldReleaseCue() {
+        let cue: AudioPromptCue = .holdRelease
+        guard promptEngine.hasRecording(for: cue) else { return }
+        promptEngine.play(cue)
+    }
+
+    private func playSilentRecording(resource: String, preferredExtension: String, shouldPause: Bool) {
+        let cue: AudioPromptCue = .custom(text: "", resource: resource, preferredExtension: preferredExtension)
+        guard promptEngine.hasRecording(for: cue) else { return }
+        if shouldPause {
+            pauseWhileAudio = true
+        }
+        promptEngine.play(cue)
     }
 
     private func publishChange() {
