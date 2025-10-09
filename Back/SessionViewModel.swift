@@ -67,12 +67,12 @@ final class SessionViewModel: ObservableObject {
 
     var onSessionCompletion: ((SessionSummary) -> Void)?
 
-    // Rest durations reduced from 5 to 3 seconds
+    // Rest durations reduced from 5 to 2 seconds
     // First exercise is 10 reps; each rep = two 5s holds (handled by halfRep logic).
     let exercises: [ExerciseDefinition] = [
         ExerciseDefinition(title: "Single Knee-to-Chest", holdDuration: 5, restDuration: 3, reps: 10, postExerciseRest: 15),
-        ExerciseDefinition(title: "Double Knee-to-Chest", holdDuration: 10, restDuration: 3, reps: 10, postExerciseRest: 15),
-        ExerciseDefinition(title: "Hamstring Stretch (Right)", holdDuration: 5, restDuration: 3, reps: 10, postExerciseRest: 15),
+        ExerciseDefinition(title: "Double Knee-to-Chest", holdDuration: 10, restDuration: 3, reps: 10, postExerciseRest: 20),
+        ExerciseDefinition(title: "Hamstring Stretch (Right)", holdDuration: 5, restDuration: 3, reps: 10, postExerciseRest: 5),
         ExerciseDefinition(title: "Hamstring Stretch (Left)", holdDuration: 5, restDuration: 3, reps: 10, postExerciseRest: 0)
     ]
 
