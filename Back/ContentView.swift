@@ -29,7 +29,7 @@ struct ContentView: View {
                                 .transition(.opacity)
                         }
                     }
-                    .animation(.easeInOut(duration: 0.35), value: analyticsSummary?.sessionsToday)
+                    .animation(.easeInOut(duration: 0.35), value: sessionHistory.count)
                 }
                 .padding(.vertical, 32)
                 .padding(.horizontal, 24)
@@ -68,16 +68,26 @@ struct ContentView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        HStack(spacing: 12) {
             Text("Workout Session")
                 .font(.title2.weight(.semibold))
-            // Voice mode remains auto-driven; silent toggle controls alternate prompts.
-            Toggle(isOn: $viewModel.isSilentModeEnabled) {
-                Label("Silent Mode", systemImage: "speaker.slash.fill")
-                    .font(.subheadline)
+            Spacer()
+
+            HStack(spacing: 10) {
+                Image(systemName: viewModel.isSilentModeEnabled ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Toggle("Silent Mode", isOn: $viewModel.isSilentModeEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(.accentColor)
+                    .accessibilityLabel("Silent Mode")
             }
-            .toggleStyle(.switch)
-            .tint(.accentColor)
+            .padding(.leading, 12)
+            .padding(.trailing, 6)
+            .padding(.vertical, 6)
+            .background(.thinMaterial, in: Capsule())
         }
     }
 
@@ -240,7 +250,8 @@ struct ContentView: View {
                 analyticsRow(title: "Current Streak", value: summary.currentStreakDescription)
                 analyticsRow(title: "Longest Streak", value: summary.longestStreakDescription)
                 analyticsRow(title: "Last Session", value: summary.lastSessionDescription)
-                analyticsRow(title: "Average Duration", value: summary.averageDurationDescription)
+                analyticsRow(title: "Time Spent Today", value: summary.timeSpentTodayDescription)
+                analyticsRow(title: "30-Day Avg Sessions/Day", value: summary.last30DaysDailyAverageDescription)
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -356,17 +367,33 @@ private struct AnalyticsSummary {
     let sessionsToday: Int
     let currentStreak: Int
     let longestStreak: Int
-    let averageDuration: TimeInterval
     let lastSessionDuration: TimeInterval
+    let todayTotalDuration: TimeInterval
+    let last30DaysDailySessionsAverage: Double
+
+    private static let dayBoundaryHour = 4
 
     init?(records: [SessionRecord]) {
         guard !records.isEmpty else { return nil }
         let calendar = Calendar.current
-        sessionsToday = records.filter { calendar.isDateInToday($0.startedAt) }.count
-        averageDuration = records.map { $0.duration }.reduce(0, +) / Double(records.count)
-        lastSessionDuration = records.first?.duration ?? 0
+        let todayActivityDay = Self.activityDay(for: Date(), calendar: calendar)
+        let sessionsWithDay = records.map { record in
+            (record: record, day: Self.activityDay(for: record.startedAt, calendar: calendar))
+        }
 
-        let uniqueDays = Array(Set(records.map { calendar.startOfDay(for: $0.startedAt) })).sorted()
+        sessionsToday = sessionsWithDay.filter { calendar.isDate($0.day, inSameDayAs: todayActivityDay) }.count
+        todayTotalDuration = sessionsWithDay
+            .filter { calendar.isDate($0.day, inSameDayAs: todayActivityDay) }
+            .reduce(0) { partial, item in
+                partial + max(item.record.duration, 0)
+            }
+        lastSessionDuration = max(records.first?.duration ?? 0, 0)
+
+        let trailing30DayStart = calendar.date(byAdding: .day, value: -29, to: todayActivityDay) ?? todayActivityDay
+        let sessionsInTrailing30Days = sessionsWithDay.filter { $0.day >= trailing30DayStart && $0.day <= todayActivityDay }.count
+        last30DaysDailySessionsAverage = Double(sessionsInTrailing30Days) / 30.0
+
+        let uniqueDays = Array(Set(sessionsWithDay.map { $0.day })).sorted()
         let daySet = Set(uniqueDays)
         if uniqueDays.isEmpty {
             currentStreak = 0
@@ -393,7 +420,10 @@ private struct AnalyticsSummary {
                     streak += 1
                     cursor = previous
                 }
-                currentStreak = calendar.isDateInToday(mostRecent) || calendar.isDateInYesterday(mostRecent) ? streak : 0
+                let yesterdayActivityDay = calendar.date(byAdding: .day, value: -1, to: todayActivityDay) ?? todayActivityDay
+                let isRecentEnough = calendar.isDate(mostRecent, inSameDayAs: todayActivityDay)
+                    || calendar.isDate(mostRecent, inSameDayAs: yesterdayActivityDay)
+                currentStreak = isRecentEnough ? streak : 0
             } else {
                 currentStreak = 0
             }
@@ -408,18 +438,35 @@ private struct AnalyticsSummary {
         longestStreak > 0 ? "\(longestStreak) days" : "—"
     }
 
-    var averageDurationDescription: String {
-        guard averageDuration.isFinite else { return "—" }
-        let minutes = Int(averageDuration) / 60
-        let seconds = Int(averageDuration) % 60
-        return String(format: "%02d:%02d", minutes, seconds)
+    var timeSpentTodayDescription: String {
+        formatDuration(todayTotalDuration)
+    }
+
+    var last30DaysDailyAverageDescription: String {
+        guard last30DaysDailySessionsAverage.isFinite else { return "—" }
+        return String(format: "%.2f", last30DaysDailySessionsAverage)
     }
 
     var lastSessionDescription: String {
         guard lastSessionDuration > 0 else { return "—" }
-        let minutes = Int(lastSessionDuration) / 60
-        let seconds = Int(lastSessionDuration) % 60
+        return formatDuration(lastSessionDuration)
+    }
+
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let safeDuration = max(duration, 0)
+        let totalSeconds = Int(safeDuration.rounded())
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+        }
         return String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    private static func activityDay(for date: Date, calendar: Calendar) -> Date {
+        let shiftedDate = calendar.date(byAdding: .hour, value: -dayBoundaryHour, to: date) ?? date
+        return calendar.startOfDay(for: shiftedDate)
     }
 }
 
