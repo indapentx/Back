@@ -13,6 +13,9 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \SessionRecord.startedAt, order: .reverse) private var sessionHistory: [SessionRecord]
     @StateObject private var viewModel = SessionViewModel()
+    @State private var displayedHistoryMonth: Date = Calendar.current.startOfMonth(for: Date())
+    @State private var selectedHistoryDay: Date = Calendar.current.startOfDay(for: Date())
+    @State private var hasInitializedHistorySelection = false
 
     var body: some View {
         NavigationStack {
@@ -30,6 +33,8 @@ struct ContentView: View {
                         }
                     }
                     .animation(.easeInOut(duration: 0.35), value: sessionHistory.count)
+
+                    historySection
                 }
                 .padding(.vertical, 32)
                 .padding(.horizontal, 24)
@@ -47,6 +52,15 @@ struct ContentView: View {
     }
 
     private func configureSessionCallbacks() {
+        if !hasInitializedHistorySelection {
+            hasInitializedHistorySelection = true
+            if let latestSession = sessionHistory.first {
+                let latestDay = Calendar.current.startOfDay(for: latestSession.startedAt)
+                selectedHistoryDay = latestDay
+                displayedHistoryMonth = Calendar.current.startOfMonth(for: latestDay)
+            }
+        }
+
         viewModel.onSessionCompletion = { summary in
             let record = SessionRecord(startedAt: summary.start,
                                        endedAt: summary.end,
@@ -55,6 +69,10 @@ struct ContentView: View {
                                        autoplayEnabled: summary.autoplayEnabled)
             modelContext.insert(record)
             try? modelContext.save()
+
+            let completedDay = Calendar.current.startOfDay(for: summary.start)
+            selectedHistoryDay = completedDay
+            displayedHistoryMonth = Calendar.current.startOfMonth(for: completedDay)
         }
     }
 
@@ -293,6 +311,298 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var historySection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Session History")
+                .font(.title2.weight(.semibold))
+
+            if sessionHistory.isEmpty {
+                historyPlaceholder
+            } else {
+                historyCalendarCard
+                historyDetailCard
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var historyPlaceholder: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Complete your first session to unlock calendar history.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text("You will be able to tap any day and inspect your completed sessions.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .shadow(color: Color.black.opacity(0.04), radius: 12, x: 0, y: 4)
+    }
+
+    private var historyCalendarCard: some View {
+        VStack(spacing: 14) {
+            HStack {
+                Button(action: { shiftDisplayedHistoryMonth(by: -1) }) {
+                    Image(systemName: "chevron.left")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 30, height: 30)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                VStack(spacing: 2) {
+                    Text(displayedHistoryMonth.formatted(.dateTime.month(.wide).year()))
+                        .font(.headline)
+                    Text("\(sessionsInDisplayedMonth) session\(sessionsInDisplayedMonth == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button(action: { shiftDisplayedHistoryMonth(by: 1) }) {
+                    Image(systemName: "chevron.right")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 30, height: 30)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 8) {
+                ForEach(Array(historyWeekdaySymbols.enumerated()), id: \.offset) { _, symbol in
+                    Text(symbol)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+
+                ForEach(historyMonthDays) { day in
+                    historyDayCell(day)
+                }
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .shadow(color: Color.black.opacity(0.04), radius: 12, x: 0, y: 4)
+    }
+
+    private func historyDayCell(_ day: HistoryCalendarDay) -> some View {
+        let calendar = Calendar.current
+        let daySessionCount = sessionsByDay[day.date, default: []].count
+        let isSelected = calendar.isDate(day.date, inSameDayAs: selectedHistoryDay)
+
+        return Button {
+            selectedHistoryDay = day.date
+        } label: {
+            VStack(spacing: 6) {
+                Text("\(calendar.component(.day, from: day.date))")
+                    .font(.subheadline.weight(isSelected ? .semibold : .regular))
+                    .frame(maxWidth: .infinity)
+
+                if daySessionCount > 0 {
+                    Text("\(daySessionCount)")
+                        .font(.caption2.weight(.bold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule().fill(
+                                isSelected
+                                ? Color.accentColor
+                                : Color.accentColor.opacity(historyIntensity(for: daySessionCount))
+                            )
+                        )
+                        .foregroundStyle(isSelected ? Color.white : Color.accentColor)
+                } else {
+                    Capsule()
+                        .fill(Color.clear)
+                        .frame(width: 16, height: 4)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(
+                        isSelected
+                        ? Color.accentColor.opacity(0.45)
+                        : Color.primary.opacity(day.isInDisplayedMonth ? 0.08 : 0.03),
+                        lineWidth: 1
+                    )
+            )
+            .opacity(day.isInDisplayedMonth ? 1 : 0.45)
+            .foregroundStyle(day.isInDisplayedMonth ? Color.primary : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .disabled(!day.isInDisplayedMonth)
+    }
+
+    private var historyDetailCard: some View {
+        let sessions = selectedDaySessions
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selectedHistoryDay.formatted(.dateTime.weekday(.wide).month(.wide).day()))
+                        .font(.headline)
+                    Text("\(sessions.count) session\(sessions.count == 1 ? "" : "s") • \(selectedDayTotalReps) reps")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Text(formatDuration(selectedDayTotalDuration))
+                    .font(.headline.monospacedDigit())
+            }
+
+            if sessions.isEmpty {
+                Text("No sessions logged on this day.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
+                        historySessionRow(session)
+                        if index < sessions.count - 1 {
+                            Divider()
+                        }
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .shadow(color: Color.black.opacity(0.04), radius: 12, x: 0, y: 4)
+    }
+
+    private func historySessionRow(_ session: SessionRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(session.startedAt.formatted(date: .omitted, time: .shortened))
+                    .font(.subheadline.weight(.semibold))
+
+                Spacer()
+
+                Text(formatDuration(session.duration))
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 14) {
+                Label("\(session.exerciseCount) exercises", systemImage: "list.bullet")
+                Label("\(session.totalReps) reps", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var sessionsByDay: [Date: [SessionRecord]] {
+        Dictionary(grouping: sessionHistory) { record in
+            Calendar.current.startOfDay(for: record.startedAt)
+        }
+    }
+
+    private var selectedDaySessions: [SessionRecord] {
+        let day = Calendar.current.startOfDay(for: selectedHistoryDay)
+        return sessionsByDay[day, default: []].sorted { lhs, rhs in
+            lhs.startedAt > rhs.startedAt
+        }
+    }
+
+    private var selectedDayTotalDuration: TimeInterval {
+        selectedDaySessions.reduce(0) { partial, session in
+            partial + max(session.duration, 0)
+        }
+    }
+
+    private var selectedDayTotalReps: Int {
+        selectedDaySessions.reduce(0) { partial, session in
+            partial + max(session.totalReps, 0)
+        }
+    }
+
+    private var sessionsInDisplayedMonth: Int {
+        sessionHistory.filter { record in
+            Calendar.current.isDate(record.startedAt, equalTo: displayedHistoryMonth, toGranularity: .month)
+        }.count
+    }
+
+    private var historyWeekdaySymbols: [String] {
+        let calendar = Calendar.current
+        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        let shift = calendar.firstWeekday - 1
+        return (0..<symbols.count).map { index in
+            symbols[(index + shift) % symbols.count].uppercased()
+        }
+    }
+
+    private var historyMonthDays: [HistoryCalendarDay] {
+        let calendar = Calendar.current
+        let monthStart = calendar.startOfMonth(for: displayedHistoryMonth)
+        let firstWeekday = calendar.component(.weekday, from: monthStart)
+        let leadingDays = (firstWeekday - calendar.firstWeekday + 7) % 7
+
+        guard let gridStart = calendar.date(byAdding: .day, value: -leadingDays, to: monthStart) else {
+            return []
+        }
+
+        return (0..<42).compactMap { offset in
+            guard let date = calendar.date(byAdding: .day, value: offset, to: gridStart) else {
+                return nil
+            }
+            let normalizedDate = calendar.startOfDay(for: date)
+            return HistoryCalendarDay(
+                date: normalizedDate,
+                isInDisplayedMonth: calendar.isDate(normalizedDate, equalTo: monthStart, toGranularity: .month)
+            )
+        }
+    }
+
+    private func shiftDisplayedHistoryMonth(by value: Int) {
+        let calendar = Calendar.current
+        guard let shiftedDate = calendar.date(byAdding: .month, value: value, to: displayedHistoryMonth) else {
+            return
+        }
+
+        let shiftedMonth = calendar.startOfMonth(for: shiftedDate)
+        displayedHistoryMonth = shiftedMonth
+
+        if !calendar.isDate(selectedHistoryDay, equalTo: shiftedMonth, toGranularity: .month) {
+            selectedHistoryDay = shiftedMonth
+        }
+    }
+
+    private func historyIntensity(for count: Int) -> Double {
+        min(0.30 + (Double(count) * 0.14), 0.90)
+    }
+
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let safeDuration = max(duration, 0)
+        let totalSeconds = Int(safeDuration.rounded())
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+
+        if hours > 0 {
+            return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+
     private var currentExerciseTitle: String {
         if let exercise = viewModel.currentExercise {
             return exercise.title
@@ -467,6 +777,19 @@ private struct AnalyticsSummary {
     private static func activityDay(for date: Date, calendar: Calendar) -> Date {
         let shiftedDate = calendar.date(byAdding: .hour, value: -dayBoundaryHour, to: date) ?? date
         return calendar.startOfDay(for: shiftedDate)
+    }
+}
+
+private struct HistoryCalendarDay: Identifiable {
+    let date: Date
+    let isInDisplayedMonth: Bool
+
+    var id: Date { date }
+}
+
+private extension Calendar {
+    func startOfMonth(for date: Date) -> Date {
+        self.date(from: self.dateComponents([.year, .month], from: date)) ?? startOfDay(for: date)
     }
 }
 
